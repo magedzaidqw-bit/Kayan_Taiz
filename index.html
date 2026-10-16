@@ -1158,6 +1158,8 @@ async function _saveDataNow() {
           water_meter_out:h.waterMeterOut|| null,
           elec_price:  h.elecPrice  != null && h.elecPrice  !== '' ? parseFloat(h.elecPrice)  : null,
           water_price: h.waterPrice != null && h.waterPrice !== '' ? parseFloat(h.waterPrice) : null,
+          elec_amount:  h.elecAmount  != null && h.elecAmount  !== '' ? parseFloat(h.elecAmount)  : null,
+          water_amount: h.waterAmount != null && h.waterAmount !== '' ? parseFloat(h.waterAmount) : null,
           tenant_rating: h.tenantRating || 'ok',
           rating_note: h.ratingNote || '',
           is_renewal: !!h.isRenewal
@@ -1262,6 +1264,8 @@ async function loadFromCloud() {
         waterMeterOut:r.water_meter_out || '',
         elecPrice:  r.elec_price  != null ? parseFloat(r.elec_price)  : null,
         waterPrice: r.water_price != null ? parseFloat(r.water_price) : null,
+        elecAmount:  r.elec_amount  != null ? parseFloat(r.elec_amount)  : null,
+        waterAmount: r.water_amount != null ? parseFloat(r.water_amount) : null,
         tenantRating: r.tenant_rating || 'ok',
         ratingNote: r.rating_note || '',
         isRenewal: !!r.is_renewal
@@ -1506,13 +1510,36 @@ function utilPriceFieldsHtml(prefix, oninput) {
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
     + '<div><label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">سعر الكيلو واط (ريال)</label><input id="' + prefix + '_eprice" type="number" min="0" value="' + d.elec + '" ' + (oninput ? 'oninput="' + oninput + '"' : '') + ' style="' + st + '"></div>'
     + '<div><label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">سعر وحدة الماء (ريال)</label><input id="' + prefix + '_wprice" type="number" min="0" value="' + d.water + '" ' + (oninput ? 'oninput="' + oninput + '"' : '') + ' style="' + st + '"></div>'
-    + '</div></div>';
+    + '<div><label style="display:block;font-size:12px;font-weight:700;color:#E8C96A;margin-bottom:5px;">مبلغ الكهرباء النهائي (ريال)</label><input id="' + prefix + '_eamt" type="number" min="0" placeholder="يُحسب تلقائياً" oninput="this.dataset.manual=this.value===\'\'?\'\':\'1\'" style="' + st + '"></div>'
+    + '<div><label style="display:block;font-size:12px;font-weight:700;color:#E8C96A;margin-bottom:5px;">مبلغ الماء النهائي (ريال)</label><input id="' + prefix + '_wamt" type="number" min="0" placeholder="يُحسب تلقائياً" oninput="this.dataset.manual=this.value===\'\'?\'\':\'1\'" style="' + st + '"></div>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#8FA3B1;margin-top:8px;line-height:1.7;">المبلغان النهائيان يُحسبان تلقائياً من السعر والقراءات، لكن اكتب فيهما المبلغ الذي حسبه الموظف على النزيل في الكشف الورقي لو اختلف — هذا المبلغ هو ما يُعتمد في التقرير.</div>'
+    + '</div>';
+}
+// يملأ المبلغين تلقائياً ما لم يكتبهما المستخدم يدوياً
+function fillUtilAmounts(prefix, elecBill, waterBill) {
+  var ea = document.getElementById(prefix + '_eamt'), wa = document.getElementById(prefix + '_wamt');
+  if (ea && ea.dataset.manual !== '1') ea.value = Math.round(elecBill || 0);
+  if (wa && wa.dataset.manual !== '1') wa.value = Math.round(waterBill || 0);
 }
 function readUtilPrices(prefix) {
   var e = parseFloat(document.getElementById(prefix + '_eprice')?.value);
   var w = parseFloat(document.getElementById(prefix + '_wprice')?.value);
   if (!(e > 0) || !(w > 0)) { alert('⛔ يرجى إدخال سعر الكهرباء وسعر الماء (أكبر من صفر)'); return null; }
-  return { elec: e, water: w };
+  var ea = parseFloat(document.getElementById(prefix + '_eamt')?.value || 0) || 0;
+  var wa = parseFloat(document.getElementById(prefix + '_wamt')?.value || 0) || 0;
+  if (ea < 0 || wa < 0) { alert('⛔ المبلغ النهائي لا يمكن أن يكون سالباً'); return null; }
+  return { elec: e, water: w, elecAmt: ea, waterAmt: wa };
+}
+// مبلغ سجل تاريخي: المبلغ النهائي المحفوظ إن وُجد، وإلا الحساب من السعر والقراءات
+function recordUtilBills(h, elecRaw, waterRaw) {
+  var rp = recordUtilPrices(h);
+  var hasE = h && h.elecAmount != null && h.elecAmount !== '';
+  var hasW = h && h.waterAmount != null && h.waterAmount !== '';
+  return {
+    eb: hasE ? parseFloat(h.elecAmount)  : Math.max(0, Math.max(0, elecRaw)  - 10) * rp.elec,
+    wb: hasW ? parseFloat(h.waterAmount) : Math.max(0, Math.max(0, waterRaw) - 2)  * rp.water
+  };
 }
 async function saveMeterReading(aptId, year, month, elec, water) {
   var key = meterKey(aptId, year, month);
@@ -2516,8 +2543,28 @@ function openRenewModal(aptId) {
   var rnSaveBtn = document.querySelector(".btn-save");
   rnSaveBtn.setAttribute("onclick", `saveRenew(${aptId})`);
   // أسعار الكهرباء والماء لتصفية العقد المنتهي — تُحفظ مع سجل النزيل
-  rnSaveBtn.parentNode.insertAdjacentHTML('beforebegin', utilPriceFieldsHtml('rn'));
+  rnSaveBtn.parentNode.insertAdjacentHTML('beforebegin', utilPriceFieldsHtml('rn', 'calcRenewUtil(' + aptId + ')'));
+  ['f_elec', 'f_water'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', function() { calcRenewUtil(aptId); });
+  });
   calcRenewalPrice();
+}
+
+// حساب مبلغ كهرباء/ماء العقد المنتهي عند التجديد (من قراءة التجديد مقابل آخر قراءة مرجعية)
+function calcRenewUtil(aptId) {
+  var old = leases[aptId];
+  if (!old) return;
+  var latest = getLatestMeterReading(aptId);
+  var elecBase  = latest ? parseFloat(latest.elec  || 0) : parseFloat(old.elecMeterIn  || 0);
+  var waterBase = latest ? parseFloat(latest.water || 0) : parseFloat(old.waterMeterIn || 0);
+  var eNow = document.getElementById('f_elec')?.value, wNow = document.getElementById('f_water')?.value;
+  if (!eNow && !wNow) return;
+  var ep = parseFloat(document.getElementById('rn_eprice')?.value) || 0;
+  var wp = parseFloat(document.getElementById('rn_wprice')?.value) || 0;
+  var eb = Math.max(0, Math.max(0, parseFloat(eNow || 0) - elecBase)  - 10) * ep;
+  var wb = Math.max(0, Math.max(0, parseFloat(wNow || 0) - waterBase) - 2)  * wp;
+  fillUtilAmounts('rn', eb, wb);
 }
 
 function collectForm() {
@@ -2573,6 +2620,7 @@ async function saveRenew(aptId) {
     history[aptId].push({ ...old, endedAt: new Date().toISOString(), reason: "تجديد",
       elecMeterOut: form.elecMeterIn, waterMeterOut: form.waterMeterIn,
       elecPrice: rnPrices.elec, waterPrice: rnPrices.water,
+      elecAmount: rnPrices.elecAmt, waterAmount: rnPrices.waterAmt,
       recordId: generateRecordId(aptId, old.startDate, old.endDate) });
   }
   leases[aptId] = { ...form, aptId, isRenewal: true };
@@ -2642,6 +2690,7 @@ function calcVacateCost(aptId) {
   var elecBill  = Math.max(0, elecDiff  - FREE_ELEC)  * elecPrice;
   var waterBill = Math.max(0, waterDiff - FREE_WATER) * waterPrice;
   var total = elecBill + waterBill;
+  fillUtilAmounts('vc', elecBill, waterBill);
   box.style.display = 'block';
   box.innerHTML =
     '<div style="font-weight:800;color:#7ECFA0;margin-bottom:8px;">💡 حساب الاستهلاك (بالريال اليمني)</div>'
@@ -2701,6 +2750,7 @@ async function confirmVacate(aptId) {
     elecMeterOut: elecOut,
     waterMeterOut: waterOut,
     elecPrice: vcPrices.elec, waterPrice: vcPrices.water,
+    elecAmount: vcPrices.elecAmt, waterAmount: vcPrices.waterAmt,
     recordId: generateRecordId(aptId, old.startDate, old.endDate)
   });
   delete leases[aptId];
@@ -2972,8 +3022,10 @@ function openEditHistoryModal(aptId, recordId) {
       ${fld('ماء عند الخروج','eh_water_out',h.waterMeterOut,'number')}
       ${fld('سعر الكيلو واط (ريال)','eh_eprice',h.elecPrice,'number')}
       ${fld('سعر وحدة الماء (ريال)','eh_wprice',h.waterPrice,'number')}
+      ${fld('مبلغ الكهرباء النهائي (ريال)','eh_eamt',h.elecAmount,'number')}
+      ${fld('مبلغ الماء النهائي (ريال)','eh_wamt',h.waterAmount,'number')}
     </div>
-    <div style="font-size:11px;color:#8FA3B1;margin:-4px 0 10px;">* إذا تُركت الأسعار فارغة يُستخدم السعر العام الحالي لهذا السجل القديم.</div>
+    <div style="font-size:11px;color:#8FA3B1;margin:-4px 0 10px;">* إذا تُركت الأسعار فارغة يُستخدم السعر العام الحالي، وإذا تُرك المبلغ النهائي فارغاً يُحسب من السعر والقراءات.</div>
     <div style="margin-bottom:10px;">
       <label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">ملاحظات</label>
       <textarea id="eh_notes" rows="2" style="width:100%;padding:9px 12px;border:1px solid rgba(201,168,76,0.3);border-radius:8px;font-family:inherit;font-size:13px;background:rgba(255,255,255,0.04);color:#F0F4F8;outline:none;">${h.notes||''}</textarea>
@@ -3017,6 +3069,8 @@ async function saveEditHistoryRecord(aptId, recordId) {
     waterMeterOut: g('eh_water_out'),
     elecPrice:  g('eh_eprice')  !== '' ? parseFloat(g('eh_eprice'))  : null,
     waterPrice: g('eh_wprice') !== '' ? parseFloat(g('eh_wprice')) : null,
+    elecAmount:  g('eh_eamt') !== '' ? parseFloat(g('eh_eamt')) : null,
+    waterAmount: g('eh_wamt') !== '' ? parseFloat(g('eh_wamt')) : null,
     notes: g('eh_notes')
   };
   saveData();
@@ -3696,6 +3750,7 @@ function calcTransferSourceCost(fromAptId) {
   var elecBill  = Math.max(0, elecDiff  - FREE_ELEC)  * elecPrice;
   var waterBill = Math.max(0, waterDiff - FREE_WATER) * waterPrice;
   var total = elecBill + waterBill;
+  fillUtilAmounts('tr', elecBill, waterBill);
   box.style.display = 'block';
   box.innerHTML =
     '<div style="font-weight:800;color:#7ECFA0;margin-bottom:8px;">💡 حساب استهلاك الشقة الحالية قبل النقل (بالريال اليمني)</div>'
@@ -3803,6 +3858,7 @@ async function confirmTransfer(fromAptId) {
     elecMeterOut: elecOut,
     waterMeterOut: waterOut,
     elecPrice: trPrices.elec, waterPrice: trPrices.water,
+    elecAmount: trPrices.elecAmt, waterAmount: trPrices.waterAmt,
     recordId: generateRecordId(fromAptId, old.startDate, old.endDate)
   });
   delete leases[fromAptId];
@@ -4640,9 +4696,9 @@ function renderReport() {
       var elecIn=parseFloat(h.elecMeterIn||0), elecOut=parseFloat(h.elecMeterOut||0);
       var waterIn=parseFloat(h.waterMeterIn||0), waterOut=parseFloat(h.waterMeterOut||0);
       var elecRaw=elecOut-elecIn, waterRaw=waterOut-waterIn;
-      var rp=recordUtilPrices(h);
-      var eb=Math.max(0,Math.max(0,elecRaw)-10)*rp.elec;
-      var wb=Math.max(0,Math.max(0,waterRaw)-2)*rp.water;
+      var bills=recordUtilBills(h,elecRaw,waterRaw);
+      var eb=bills.eb;
+      var wb=bills.wb;
       totalUtilYER+=eb+wb;
       utilItems.push({apt:a.number,name:h.tenantName,eb:eb,wb:wb,active:false,reason:h.reason,
         elecFrom:elecIn,elecTo:elecOut,waterFrom:waterIn,waterTo:waterOut,
@@ -4866,7 +4922,7 @@ function buildReportHTML() {
   APARTMENTS.forEach(function(a){ var l=leases[a.id]; if(!l) return; var ls=new Date(l.startDate); if(ls>=monthStart&&ls<=monthEnd){ var st=getPaymentStatus(a.id,y,m,l.startDate); rentItems.push({apt:a.number,name:l.tenantName,price:Number(l.price),paid:!!(st&&st.paid)}); totalRentSAR+=Number(l.price); } });
   APARTMENTS.forEach(function(a){ (history[a.id]||[]).forEach(function(h){ var hs=new Date(h.startDate); if(hs>=monthStart&&hs<=monthEnd){ var st=getPaymentStatus(a.id,y,m,h.startDate); rentItems.push({apt:a.number,name:h.tenantName,price:Number(h.price),paid:!!(st&&st.paid)}); totalRentSAR+=Number(h.price); } }); });
   var utilItems=[], totalUtilYER=0;
-  APARTMENTS.forEach(function(a){ (history[a.id]||[]).forEach(function(h){ if(h.reason!=='إخلاء' && h.reason!=='تجديد' && h.reason!=='نقل لشقة أخرى') return; var ea=new Date(h.endedAt||h.endDate); if(ea<monthStart||ea>monthEnd) return; if(!h.elecMeterOut&&!h.waterMeterOut) return; var rp=recordUtilPrices(h); var eb=Math.max(0,Math.max(0,parseFloat(h.elecMeterOut||0)-parseFloat(h.elecMeterIn||0))-10)*rp.elec; var wb=Math.max(0,Math.max(0,parseFloat(h.waterMeterOut||0)-parseFloat(h.waterMeterIn||0))-2)*rp.water; totalUtilYER+=eb+wb; utilItems.push({apt:a.number,name:h.tenantName,eb:eb,wb:wb,active:false}); }); });
+  APARTMENTS.forEach(function(a){ (history[a.id]||[]).forEach(function(h){ if(h.reason!=='إخلاء' && h.reason!=='تجديد' && h.reason!=='نقل لشقة أخرى') return; var ea=new Date(h.endedAt||h.endDate); if(ea<monthStart||ea>monthEnd) return; if(!h.elecMeterOut&&!h.waterMeterOut) return; var bl=recordUtilBills(h,parseFloat(h.elecMeterOut||0)-parseFloat(h.elecMeterIn||0),parseFloat(h.waterMeterOut||0)-parseFloat(h.waterMeterIn||0)); var eb=bl.eb; var wb=bl.wb; totalUtilYER+=eb+wb; utilItems.push({apt:a.number,name:h.tenantName,eb:eb,wb:wb,active:false}); }); });
   var expSAR=parseFloat(document.getElementById('expSAR')?.value||0);
   var expYER=parseFloat(document.getElementById('expYER')?.value||0);
   var netSAR=totalRentSAR-expSAR, netYER=totalUtilYER-expYER;
