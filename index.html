@@ -1156,6 +1156,8 @@ async function _saveDataNow() {
           water_meter_in: h.waterMeterIn || null,
           elec_meter_out: h.elecMeterOut || null,
           water_meter_out:h.waterMeterOut|| null,
+          elec_price:  h.elecPrice  != null && h.elecPrice  !== '' ? parseFloat(h.elecPrice)  : null,
+          water_price: h.waterPrice != null && h.waterPrice !== '' ? parseFloat(h.waterPrice) : null,
           tenant_rating: h.tenantRating || 'ok',
           rating_note: h.ratingNote || '',
           is_renewal: !!h.isRenewal
@@ -1258,6 +1260,8 @@ async function loadFromCloud() {
         waterMeterIn: r.water_meter_in  || '',
         elecMeterOut: r.elec_meter_out  || '',
         waterMeterOut:r.water_meter_out || '',
+        elecPrice:  r.elec_price  != null ? parseFloat(r.elec_price)  : null,
+        waterPrice: r.water_price != null ? parseFloat(r.water_price) : null,
         tenantRating: r.tenant_rating || 'ok',
         ratingNote: r.rating_note || '',
         isRenewal: !!r.is_renewal
@@ -1470,6 +1474,45 @@ function getLatestMeterReading(aptId) {
     }
   });
   return latest;
+}
+// ── أسعار الكهرباء والماء: تُحفظ مع كل سجل تصفية، ويُقترح آخر سعر مستخدم (من السحابة) كقيمة افتراضية ──
+function getDefaultUtilPrices() {
+  var best = null;
+  Object.keys(history).forEach(function(k) {
+    (history[k] || []).forEach(function(h) {
+      if (h.elecPrice || h.waterPrice) {
+        var t = new Date(h.endedAt || h.endDate).getTime();
+        if (!best || t > best.t) best = { t: t, e: h.elecPrice, w: h.waterPrice };
+      }
+    });
+  });
+  return {
+    elec:  parseFloat((best && best.e) || localStorage.getItem('kayan_elec_price')  || 1000),
+    water: parseFloat((best && best.w) || localStorage.getItem('kayan_water_price') || 15000)
+  };
+}
+// سعر سجل تاريخي: المحفوظ فيه، وإلا السعر العام الحالي (للسجلات القديمة قبل هذا التعديل)
+function recordUtilPrices(h) {
+  return {
+    elec:  parseFloat(h && h.elecPrice  || localStorage.getItem('kayan_elec_price')  || 1000),
+    water: parseFloat(h && h.waterPrice || localStorage.getItem('kayan_water_price') || 15000)
+  };
+}
+function utilPriceFieldsHtml(prefix, oninput) {
+  var d = getDefaultUtilPrices();
+  var st = 'width:100%;padding:8px 12px;border:1px solid rgba(201,168,76,0.3);border-radius:8px;font-family:inherit;font-size:14px;background:rgba(255,255,255,0.04);color:#F0F4F8;outline:none;text-align:right;';
+  return '<div style="padding:12px;background:rgba(201,168,76,0.07);border:1px solid rgba(201,168,76,0.25);border-radius:10px;margin:12px 0;">'
+    + '<div style="font-weight:800;color:#E8C96A;margin-bottom:8px;font-size:13px;">💲 أسعار اليوم (تُحفظ مع هذا السجل)</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
+    + '<div><label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">سعر الكيلو واط (ريال)</label><input id="' + prefix + '_eprice" type="number" min="0" value="' + d.elec + '" ' + (oninput ? 'oninput="' + oninput + '"' : '') + ' style="' + st + '"></div>'
+    + '<div><label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">سعر وحدة الماء (ريال)</label><input id="' + prefix + '_wprice" type="number" min="0" value="' + d.water + '" ' + (oninput ? 'oninput="' + oninput + '"' : '') + ' style="' + st + '"></div>'
+    + '</div></div>';
+}
+function readUtilPrices(prefix) {
+  var e = parseFloat(document.getElementById(prefix + '_eprice')?.value);
+  var w = parseFloat(document.getElementById(prefix + '_wprice')?.value);
+  if (!(e > 0) || !(w > 0)) { alert('⛔ يرجى إدخال سعر الكهرباء وسعر الماء (أكبر من صفر)'); return null; }
+  return { elec: e, water: w };
 }
 async function saveMeterReading(aptId, year, month, elec, water) {
   var key = meterKey(aptId, year, month);
@@ -2470,7 +2513,10 @@ function openRenewModal(aptId) {
   const defaults = l ? { ...l, startDate: l.endDate, endDate: addMonths(l.endDate,1), months:1 } : null;
   openModal(`تجديد عقد شقة ${apt.number}`, rentFormHtml(apt, defaults));
   // mark as renew
-  document.querySelector(".btn-save").setAttribute("onclick", `saveRenew(${aptId})`);
+  var rnSaveBtn = document.querySelector(".btn-save");
+  rnSaveBtn.setAttribute("onclick", `saveRenew(${aptId})`);
+  // أسعار الكهرباء والماء لتصفية العقد المنتهي — تُحفظ مع سجل النزيل
+  rnSaveBtn.parentNode.insertAdjacentHTML('beforebegin', utilPriceFieldsHtml('rn'));
   calcRenewalPrice();
 }
 
@@ -2521,9 +2567,12 @@ async function saveRenew(aptId) {
       alert('⛔ خطأ: قراءة الماء المدخلة (' + form.waterMeterIn + ') أقل من آخر قراءة مسجّلة (' + waterInRn + '). عداد الماء لا يمكن أن يرجع للخلف — تحقق من الرقم وأعد الإدخال.');
       return;
     }
+    var rnPrices = readUtilPrices('rn');
+    if (!rnPrices) return;
     if (!history[aptId]) history[aptId] = [];
     history[aptId].push({ ...old, endedAt: new Date().toISOString(), reason: "تجديد",
       elecMeterOut: form.elecMeterIn, waterMeterOut: form.waterMeterIn,
+      elecPrice: rnPrices.elec, waterPrice: rnPrices.water,
       recordId: generateRecordId(aptId, old.startDate, old.endDate) });
   }
   leases[aptId] = { ...form, aptId, isRenewal: true };
@@ -2563,6 +2612,7 @@ function vacate(aptId) {
     + '<div><label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">ماء عند الخروج (وحدة)</label><input id="vc_water" type="number" min="0" placeholder="القراءة الحالية" oninput="calcVacateCost(' + aptId + ')" style="width:100%;padding:8px 12px;border:1px solid rgba(201,168,76,0.3);border-radius:8px;font-family:inherit;font-size:14px;background:rgba(255,255,255,0.04);color:#F0F4F8;outline:none;text-align:right;"></div>'
     + '</div>'
     + baselineNote
+    + utilPriceFieldsHtml('vc', 'calcVacateCost(' + aptId + ')')
     + '<div id="vacateCostBox" style="display:none;margin-top:12px;padding:12px;background:rgba(61,170,112,0.1);border:1px solid rgba(61,170,112,0.25);border-radius:8px;font-size:13px;"></div>'
     + '</div>'
     + '<div style="display:flex;gap:10px;justify-content:flex-end;">'
@@ -2580,8 +2630,8 @@ function calcVacateCost(aptId) {
   var waterIn   = latest ? parseFloat(latest.water || 0) : parseFloat(l.waterMeterIn || 0);
   var elecOut   = parseFloat(document.getElementById('vc_elec')?.value  || 0);
   var waterOut  = parseFloat(document.getElementById('vc_water')?.value || 0);
-  var elecPrice  = parseFloat(localStorage.getItem('kayan_elec_price')  || 1000);
-  var waterPrice = parseFloat(localStorage.getItem('kayan_water_price') || 15000);
+  var elecPrice  = parseFloat(document.getElementById('vc_eprice')?.value) || getDefaultUtilPrices().elec;
+  var waterPrice = parseFloat(document.getElementById('vc_wprice')?.value) || getDefaultUtilPrices().water;
   var FREE_ELEC  = 10;
   var FREE_WATER = 2;
   var box = document.getElementById('vacateCostBox');
@@ -2639,6 +2689,8 @@ async function confirmVacate(aptId) {
     alert('⛔ خطأ: قراءة الماء عند الخروج (' + waterOut + ') أقل من القراءة المرجعية (' + waterInVc + '). عداد الماء لا يمكن أن يرجع للخلف — تحقق من الرقم وأعد الإدخال.');
     return;
   }
+  var vcPrices = readUtilPrices('vc');
+  if (!vcPrices) return;
   var confirmBtn = document.querySelector('[onclick="confirmVacate(' + aptId + ')"]');
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = '⏳ جارِ الحفظ على السحابة...'; }
 
@@ -2648,6 +2700,7 @@ async function confirmVacate(aptId) {
     endedAt: new Date().toISOString(), reason: 'إخلاء',
     elecMeterOut: elecOut,
     waterMeterOut: waterOut,
+    elecPrice: vcPrices.elec, waterPrice: vcPrices.water,
     recordId: generateRecordId(aptId, old.startDate, old.endDate)
   });
   delete leases[aptId];
@@ -2917,7 +2970,10 @@ function openEditHistoryModal(aptId, recordId) {
       ${fld('كهرباء عند الخروج','eh_elec_out',h.elecMeterOut,'number')}
       ${fld('ماء عند الدخول','eh_water_in',h.waterMeterIn,'number')}
       ${fld('ماء عند الخروج','eh_water_out',h.waterMeterOut,'number')}
+      ${fld('سعر الكيلو واط (ريال)','eh_eprice',h.elecPrice,'number')}
+      ${fld('سعر وحدة الماء (ريال)','eh_wprice',h.waterPrice,'number')}
     </div>
+    <div style="font-size:11px;color:#8FA3B1;margin:-4px 0 10px;">* إذا تُركت الأسعار فارغة يُستخدم السعر العام الحالي لهذا السجل القديم.</div>
     <div style="margin-bottom:10px;">
       <label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">ملاحظات</label>
       <textarea id="eh_notes" rows="2" style="width:100%;padding:9px 12px;border:1px solid rgba(201,168,76,0.3);border-radius:8px;font-family:inherit;font-size:13px;background:rgba(255,255,255,0.04);color:#F0F4F8;outline:none;">${h.notes||''}</textarea>
@@ -2959,6 +3015,8 @@ async function saveEditHistoryRecord(aptId, recordId) {
     elecMeterOut: g('eh_elec_out'),
     waterMeterIn: g('eh_water_in'),
     waterMeterOut: g('eh_water_out'),
+    elecPrice:  g('eh_eprice')  !== '' ? parseFloat(g('eh_eprice'))  : null,
+    waterPrice: g('eh_wprice') !== '' ? parseFloat(g('eh_wprice')) : null,
     notes: g('eh_notes')
   };
   saveData();
@@ -3492,6 +3550,7 @@ function openTransferModal(fromAptId) {
     + '<div><label style="display:block;font-size:12px;font-weight:700;color:#8FA3B1;margin-bottom:5px;">ماء عند الخروج (وحدة)</label><input id="tr_src_water" type="number" min="0" placeholder="القراءة الحالية" oninput="calcTransferSourceCost(' + fromAptId + ')" style="width:100%;padding:8px 12px;border:1px solid rgba(201,168,76,0.3);border-radius:8px;font-family:inherit;font-size:14px;background:rgba(255,255,255,0.04);color:#F0F4F8;outline:none;text-align:right;"></div>'
     + '</div>'
     + srcBaselineNote
+    + utilPriceFieldsHtml('tr', 'calcTransferSourceCost(' + fromAptId + ')')
     + '<div id="tr_srcCostBox" style="display:none;margin-top:12px;padding:12px;background:rgba(61,170,112,0.1);border:1px solid rgba(61,170,112,0.25);border-radius:8px;font-size:13px;"></div>'
     + '</div>'
 
@@ -3626,8 +3685,8 @@ function calcTransferSourceCost(fromAptId) {
   var waterIn   = latest ? parseFloat(latest.water || 0) : parseFloat(l.waterMeterIn || 0);
   var elecOut   = parseFloat(document.getElementById('tr_src_elec')?.value  || 0);
   var waterOut  = parseFloat(document.getElementById('tr_src_water')?.value || 0);
-  var elecPrice  = parseFloat(localStorage.getItem('kayan_elec_price')  || 1000);
-  var waterPrice = parseFloat(localStorage.getItem('kayan_water_price') || 15000);
+  var elecPrice  = parseFloat(document.getElementById('tr_eprice')?.value) || getDefaultUtilPrices().elec;
+  var waterPrice = parseFloat(document.getElementById('tr_wprice')?.value) || getDefaultUtilPrices().water;
   var FREE_ELEC = 10, FREE_WATER = 2;
   var box = document.getElementById('tr_srcCostBox');
   if (!box) return;
@@ -3731,6 +3790,8 @@ async function confirmTransfer(fromAptId) {
 
   if (!confirm('هل تريد فعلاً نقل النزيل "' + (old.tenantName||'') + '" من شقة ' + fromApt.number + ' إلى شقة ' + toApt.number + '؟' + termNote + priceNote)) return;
 
+  var trPrices = readUtilPrices('tr');
+  if (!trPrices) return;
   var confirmBtn = document.getElementById('tr_confirm_btn');
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = '⏳ جارِ الحفظ على السحابة...'; }
 
@@ -3741,6 +3802,7 @@ async function confirmTransfer(fromAptId) {
     endedAt: new Date().toISOString(), reason: 'نقل لشقة أخرى',
     elecMeterOut: elecOut,
     waterMeterOut: waterOut,
+    elecPrice: trPrices.elec, waterPrice: trPrices.water,
     recordId: generateRecordId(fromAptId, old.startDate, old.endDate)
   });
   delete leases[fromAptId];
@@ -4578,8 +4640,9 @@ function renderReport() {
       var elecIn=parseFloat(h.elecMeterIn||0), elecOut=parseFloat(h.elecMeterOut||0);
       var waterIn=parseFloat(h.waterMeterIn||0), waterOut=parseFloat(h.waterMeterOut||0);
       var elecRaw=elecOut-elecIn, waterRaw=waterOut-waterIn;
-      var eb=Math.max(0,Math.max(0,elecRaw)-10)*elecPrice;
-      var wb=Math.max(0,Math.max(0,waterRaw)-2)*waterPrice;
+      var rp=recordUtilPrices(h);
+      var eb=Math.max(0,Math.max(0,elecRaw)-10)*rp.elec;
+      var wb=Math.max(0,Math.max(0,waterRaw)-2)*rp.water;
       totalUtilYER+=eb+wb;
       utilItems.push({apt:a.number,name:h.tenantName,eb:eb,wb:wb,active:false,reason:h.reason,
         elecFrom:elecIn,elecTo:elecOut,waterFrom:waterIn,waterTo:waterOut,
@@ -4803,8 +4866,7 @@ function buildReportHTML() {
   APARTMENTS.forEach(function(a){ var l=leases[a.id]; if(!l) return; var ls=new Date(l.startDate); if(ls>=monthStart&&ls<=monthEnd){ var st=getPaymentStatus(a.id,y,m,l.startDate); rentItems.push({apt:a.number,name:l.tenantName,price:Number(l.price),paid:!!(st&&st.paid)}); totalRentSAR+=Number(l.price); } });
   APARTMENTS.forEach(function(a){ (history[a.id]||[]).forEach(function(h){ var hs=new Date(h.startDate); if(hs>=monthStart&&hs<=monthEnd){ var st=getPaymentStatus(a.id,y,m,h.startDate); rentItems.push({apt:a.number,name:h.tenantName,price:Number(h.price),paid:!!(st&&st.paid)}); totalRentSAR+=Number(h.price); } }); });
   var utilItems=[], totalUtilYER=0;
-  APARTMENTS.forEach(function(a){ (history[a.id]||[]).forEach(function(h){ if(h.reason!=='إخلاء' && h.reason!=='تجديد' && h.reason!=='نقل لشقة أخرى') return; var ea=new Date(h.endedAt||h.endDate); if(ea<monthStart||ea>monthEnd) return; if(!h.elecMeterOut&&!h.waterMeterOut) return; var eb=Math.max(0,Math.max(0,parseFloat(h.elecMeterOut||0)-parseFloat(h.elecMeterIn||0))-10)*elecPrice; var wb=Math.max(0,Math.max(0,parseFloat(h.waterMeterOut||0)-parseFloat(h.waterMeterIn||0))-2)*waterPrice; totalUtilYER+=eb+wb; utilItems.push({apt:a.number,name:h.tenantName,eb:eb,wb:wb,active:false}); }); });
-  APARTMENTS.forEach(function(a){ var l=leases[a.id]; if(!l) return; var rec=getMeterReading(a.id,y,m); if(!rec) return; var baseline=getMeterBaseline(a.id,y,m); var eb=Math.max(0,Math.max(0,parseFloat(rec.elec||0)-baseline.elec)-10)*elecPrice; var wb=Math.max(0,Math.max(0,parseFloat(rec.water||0)-baseline.water)-2)*waterPrice; totalUtilYER+=eb+wb; utilItems.push({apt:a.number,name:l.tenantName,eb:eb,wb:wb,active:true}); });
+  APARTMENTS.forEach(function(a){ (history[a.id]||[]).forEach(function(h){ if(h.reason!=='إخلاء' && h.reason!=='تجديد' && h.reason!=='نقل لشقة أخرى') return; var ea=new Date(h.endedAt||h.endDate); if(ea<monthStart||ea>monthEnd) return; if(!h.elecMeterOut&&!h.waterMeterOut) return; var rp=recordUtilPrices(h); var eb=Math.max(0,Math.max(0,parseFloat(h.elecMeterOut||0)-parseFloat(h.elecMeterIn||0))-10)*rp.elec; var wb=Math.max(0,Math.max(0,parseFloat(h.waterMeterOut||0)-parseFloat(h.waterMeterIn||0))-2)*rp.water; totalUtilYER+=eb+wb; utilItems.push({apt:a.number,name:h.tenantName,eb:eb,wb:wb,active:false}); }); });
   var expSAR=parseFloat(document.getElementById('expSAR')?.value||0);
   var expYER=parseFloat(document.getElementById('expYER')?.value||0);
   var netSAR=totalRentSAR-expSAR, netYER=totalUtilYER-expYER;
