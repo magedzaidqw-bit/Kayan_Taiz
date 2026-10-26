@@ -5131,10 +5131,10 @@ window.addEventListener('focus', function() {
 </script>
 
 <script>
-// تنظيف: إلغاء أي Service Worker مسجّل من نسخة سابقة، لضمان ظهور التحديثات دائماً
+// خدمة عمل خفيفة بلا تخزين (شرط ظهور زر التثبيت) — لا تسبب نسخاً قديمة
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(function(regs) {
-    regs.forEach(function(reg) { reg.unregister(); });
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('pwa-sw.js').catch(function() {});
   });
 }
 
