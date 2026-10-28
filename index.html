@@ -3106,6 +3106,11 @@ function getNextContractNum() {
   return next;
 }
 
+function contractFileName(apt, l){
+  var n = ('عقد شقة ' + (apt && apt.number) + ' - ' + (l && l.tenantName || '')).replace(/[\\\/:*?"<>|]/g,'').trim();
+  return n;
+}
+
 function getContractHTML(aptId, useNewNum, overrideLease) {
   var apt = APARTMENTS.find(function(a){ return a.id===aptId; });
   var l = overrideLease || leases[aptId];
@@ -3187,7 +3192,7 @@ function getContractHTML(aptId, useNewNum, overrideLease) {
   +'}';
 
   return '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">'
-  +'<title>عقد إيجار - '+cnum+'</title>'
+  +'<title>'+contractFileName(apt,l)+'</title>'
   +'<style>'+css+'</style></head><body>'
   +'<div class="hdr">'
   +'  <div style="width:60px"></div>'
@@ -3311,6 +3316,13 @@ function printContract(aptId, useNewNum, overrideLease) {
   var iframe = document.createElement('iframe');
   iframe.style.cssText = 'position:fixed;top:0;left:-10000px;width:1px;height:1px;border:0;';
   document.body.appendChild(iframe);
+  var _apt = APARTMENTS.find(function(a){ return a.id===aptId; });
+  var _l = overrideLease || leases[aptId];
+  var _name = contractFileName(_apt,_l), _oldTitle = document.title;
+  document.title = _name;
+  var _restore = function(){ document.title = _oldTitle; };
+  window.addEventListener('afterprint', _restore, {once:true});
+  setTimeout(_restore, 60000);
   iframe.onload = function() {
     setTimeout(function() {
       iframe.contentWindow.focus();
@@ -3351,7 +3363,7 @@ async function shareContractPdf(aptId, useNewNum, overrideLease) {
 
     var opt = {
       margin: 5,
-      filename: 'عقد_شقة_' + aptId + '.pdf',
+      filename: contractFileName(APARTMENTS.find(function(a){return a.id===aptId;}), overrideLease||leases[aptId]) + '.pdf',
       image: { type: 'jpeg', quality: 0.95 },
       html2canvas: { scale: 2, useCORS: true, windowWidth: bodyContent.scrollWidth || 800 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
