@@ -758,6 +758,11 @@ async function doLogin() {
       var actBtn = document.getElementById('activityLogBtn');
       if (actBtn) actBtn.style.display = isOwner() ? 'inline-block' : 'none';
       if (isOwner()) setTimeout(loadActivityBadge, 1500);
+      // مزامنة كلمة المرور المحفوظة للبصمة إن كانت مفعّلة
+      try {
+        var _b = JSON.parse(localStorage.getItem(KAYAN_BIO_KEY) || 'null');
+        if (_b && _b.email === email && _b.pass !== pass) { _b.pass = pass; localStorage.setItem(KAYAN_BIO_KEY, JSON.stringify(_b)); }
+      } catch(_e) {}
       // عرض اقتراح البصمة إذا لم تكن مسجلة
       if (!kayanHasBio()) {
         setTimeout(async () => {
@@ -914,7 +919,14 @@ async function doKayanBiometricLogin() {
       if (actBtn) actBtn.style.display = isOwner() ? 'inline-block' : 'none';
       if (isOwner()) setTimeout(loadActivityBadge, 1500);
     } else {
-      document.getElementById('loginError').textContent = 'تعذر الدخول — ادخل يدوياً مرة واحدة';
+      if (res.status === 400 || res.status === 401 || data.error_code === 'invalid_credentials') {
+        // كلمة المرور المحفوظة قديمة (تغيّرت) — نحذف البصمة ليُعاد تفعيلها بعد الدخول اليدوي
+        localStorage.removeItem(KAYAN_BIO_KEY);
+        var bw = document.getElementById('kayan-bio-wrap'); if (bw) bw.style.display = 'none';
+        document.getElementById('loginError').textContent = 'تغيّرت كلمة المرور — ادخل بها يدوياً الآن وسيُعرض عليك تفعيل البصمة من جديد';
+      } else {
+        document.getElementById('loginError').textContent = 'تعذر الدخول (مشكلة اتصال) — حاول مجدداً';
+      }
       if (btn) { btn.disabled = false; btn.innerHTML = '<span style="font-size:20px">👆</span> دخول بالبصمة'; }
     }
   } catch(e) {
@@ -1064,6 +1076,10 @@ async function changePassword() {
       }
     }
     if (res.ok) {
+      try {
+        var _b2 = JSON.parse(localStorage.getItem(KAYAN_BIO_KEY) || 'null');
+        if (_b2) { _b2.pass = pass1; localStorage.setItem(KAYAN_BIO_KEY, JSON.stringify(_b2)); }
+      } catch(_e) {}
       closeModal();
       alert('✅ تم تغيير كلمة المرور بنجاح. استخدم كلمة المرور الجديدة في المرة القادمة.');
     } else {
